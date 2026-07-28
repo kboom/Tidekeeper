@@ -143,6 +143,7 @@ The generated repository includes:
 .github/copilot-instructions.md
 .github/skills/
   music-library-audit/
+  music-profile/
   playlist-curator/
   music-discovery/
   tidal-sync-review/

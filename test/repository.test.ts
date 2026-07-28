@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -113,6 +113,21 @@ describe('agent-ready repository generator', () => {
       ),
     ).resolves.toContain('Never run `sync push --apply`.');
     await expect(
+      readFile(
+        join(target, '.github', 'skills', 'music-profile', 'SKILL.md'),
+        'utf8',
+      ),
+    ).resolves.toContain('What makes it click');
+    await expect(
+      readFile(
+        join(target, '.github', 'skills', 'music-profile', 'scoring.md'),
+        'utf8',
+      ),
+    ).resolves.toContain('Anti-bounce discipline');
+    expect(createTemplateManifest().generatedFiles).toHaveProperty(
+      '.github/skills/music-profile/scoring.md',
+    );
+    await expect(
       readFile(join(target, '.tidekeeper', 'run-tidekeeper.mjs'), 'utf8'),
     ).resolves.toContain('const child = spawn(process.execPath');
     await expect(
@@ -138,6 +153,48 @@ describe('agent-ready repository generator', () => {
     await expect(upgradeRepository(target)).rejects.toThrow(
       /Required repository file is missing/,
     );
+  });
+
+  it('preserves user-owned preferences while upgrading generated skills', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'tidekeeper-repository-'));
+    temporaryRoots.push(parent);
+    const target = join(parent, 'music');
+    await createEmptyRepository(target);
+    const manifestPath = join(target, '.tidekeeper-template.json');
+    const manifest = JSON.parse(
+      await readFile(manifestPath, 'utf8'),
+    ) as ReturnType<typeof createTemplateManifest>;
+    manifest.templateVersion = 4;
+    manifest.generatedFiles = Object.fromEntries(
+      Object.entries(manifest.generatedFiles).filter(
+        ([path]) => !path.startsWith('.github/skills/music-profile/'),
+      ),
+    );
+    await rm(join(target, '.github', 'skills', 'music-profile'), {
+      recursive: true,
+    });
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      'utf8',
+    );
+    const preferences = join(target, 'music-preferences.md');
+    const userPreferences =
+      '# Music preferences\n\n## Your notes\n\n- Keep this.\n';
+    await writeFile(preferences, userPreferences, 'utf8');
+
+    await upgradeRepository(target);
+
+    await expect(readFile(preferences, 'utf8')).resolves.toBe(userPreferences);
+    await expect(readFile(manifestPath, 'utf8')).resolves.toContain(
+      '"templateVersion": 5',
+    );
+    await expect(
+      readFile(
+        join(target, '.github', 'skills', 'music-profile', 'scoring.md'),
+        'utf8',
+      ),
+    ).resolves.toContain('same library must always produce');
   });
 
   async function createEmptyRepository(target: string): Promise<void> {

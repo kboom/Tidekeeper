@@ -31,6 +31,12 @@ try {
     'dist/tidal/playlists.js',
     'dist/repository/service.js',
     'dist/repository/template.js',
+    'templates/repository/.github/skills/music-discovery/SKILL.md',
+    'templates/repository/.github/skills/music-library-audit/SKILL.md',
+    'templates/repository/.github/skills/music-profile/SKILL.md',
+    'templates/repository/.github/skills/music-profile/scoring.md',
+    'templates/repository/.github/skills/playlist-curator/SKILL.md',
+    'templates/repository/.github/skills/tidal-sync-review/SKILL.md',
     'package.json',
   ]) {
     assert.ok(files.includes(required), `package is missing ${required}`);
