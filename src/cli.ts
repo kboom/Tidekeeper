@@ -8,6 +8,21 @@ import {
 } from './auth/service.js';
 import { runInit } from './commands/init.js';
 import {
+  runFavoritesAdd,
+  runFavoritesRemove,
+  runLibrarySummary,
+  runPlaylistCreate,
+  runPlaylistDelete,
+  runPlaylistSetTracks,
+  runPlaylistUpdate,
+} from './commands/library.js';
+import {
+  runRepositoryCreate,
+  runRepositoryPublish,
+  runRepositoryUpgrade,
+  runRepositoryVerify,
+} from './commands/repository.js';
+import {
   runSearchTracks,
   type SearchTracksHandler,
 } from './commands/search.js';
@@ -32,6 +47,8 @@ import {
 import { planPush, pullRemote, pushLocal } from './sync/service.js';
 import { createAuthenticatedTidalClient } from './tidal/authenticated.js';
 import { searchTracks, type SearchTracksOptions } from './tidal/search.js';
+import type { RepositoryCreateDependencies } from './repository/service.js';
+import type { GitHubRepositoryVisibility } from './repository/github.js';
 
 export type CliDependencies = {
   auth?: {
@@ -40,6 +57,7 @@ export type CliDependencies = {
     status(): Promise<AuthStatus>;
   };
   searchTracks?: SearchTracksHandler;
+  repository?: RepositoryCreateDependencies;
   streams: OutputStreams;
   sync?: SyncHandlers;
 };
@@ -255,6 +273,281 @@ export function createProgram(
       );
     });
 
+  const repository = program
+    .command('repo')
+    .description('Create and maintain an agent-ready music repository');
+
+  repository
+    .command('create')
+    .description('Create, import, and commit a new TIDAL music repository')
+    .argument('<directory>', 'new repository directory')
+    .requiredOption(
+      '--country-code <code>',
+      'ISO 3166-1 alpha-2 country code used for TIDAL catalog requests',
+    )
+    .option(
+      '--ephemeral-session',
+      'keep OAuth credentials in memory for this command only',
+      false,
+    )
+    .option(
+      '--git-name <name>',
+      'Git author name to configure for this repository',
+    )
+    .option(
+      '--git-email <email>',
+      'Git author email to configure for this repository',
+    )
+    .option('--github-repo <name>', 'personal GitHub repository name', 'Tidal')
+    .option(
+      '--github-visibility <visibility>',
+      'GitHub repository visibility: private or public',
+      (value) => parseGitHubVisibility(value),
+      'private',
+    )
+    .option('--no-github', 'create only the local Git repository')
+    .action(
+      async (
+        directory: string,
+        options: {
+          countryCode: string;
+          ephemeralSession: boolean;
+          gitEmail?: string;
+          gitName?: string;
+          github: boolean;
+          githubRepo: string;
+          githubVisibility: GitHubRepositoryVisibility;
+        },
+      ) => {
+        const globalOptions = program.opts<{ output: OutputFormatValue }>();
+        await runRepositoryCreate(
+          {
+            countryCode: options.countryCode.toUpperCase(),
+            ephemeralSession: options.ephemeralSession,
+            ...(options.gitEmail === undefined
+              ? {}
+              : { gitEmail: options.gitEmail }),
+            ...(options.gitName === undefined
+              ? {}
+              : { gitName: options.gitName }),
+            github: options.github,
+            githubRepository: options.githubRepo,
+            githubVisibility: options.githubVisibility,
+            output: globalOptions.output,
+            target: directory,
+          },
+          dependencies.streams,
+          dependencies.repository,
+        );
+      },
+    );
+
+  repository
+    .command('publish')
+    .description('Create and push a personal GitHub repository')
+    .argument('[directory]', 'local Tidekeeper repository directory')
+    .option('--github-repo <name>', 'personal GitHub repository name', 'Tidal')
+    .option(
+      '--github-visibility <visibility>',
+      'GitHub repository visibility: private or public',
+      (value) => parseGitHubVisibility(value),
+      'private',
+    )
+    .action(
+      async (
+        directory: string | undefined,
+        options: {
+          githubRepo: string;
+          githubVisibility: GitHubRepositoryVisibility;
+        },
+      ) => {
+        const globalOptions = program.opts<{
+          output: OutputFormatValue;
+          root: string;
+        }>();
+        const repositoryDependencies = dependencies.repository;
+        await runRepositoryPublish(
+          {
+            output: globalOptions.output,
+            repositoryName: options.githubRepo,
+            root: directory ?? globalOptions.root,
+            visibility: options.githubVisibility,
+          },
+          dependencies.streams,
+          repositoryDependencies === undefined
+            ? undefined
+            : (publishOptions) =>
+                repositoryDependencies.publish(publishOptions),
+        );
+      },
+    );
+
+  repository
+    .command('verify')
+    .description('Verify generated repository assets and local music data')
+    .action(async () => {
+      const globalOptions = program.opts<{
+        output: OutputFormatValue;
+        root: string;
+      }>();
+      await runRepositoryVerify(globalOptions, dependencies.streams);
+    });
+
+  repository
+    .command('upgrade')
+    .description('Update unmodified generated repository assets safely')
+    .action(async () => {
+      const globalOptions = program.opts<{
+        output: OutputFormatValue;
+        root: string;
+      }>();
+      await runRepositoryUpgrade(globalOptions, dependencies.streams);
+    });
+
+  const library = program
+    .command('library')
+    .description('Safely inspect and edit the local music library');
+
+  library
+    .command('summary')
+    .description('Print a machine-readable local library summary')
+    .action(async () => {
+      const globalOptions = program.opts<{
+        output: OutputFormatValue;
+        root: string;
+      }>();
+      await runLibrarySummary(
+        globalOptions.root,
+        globalOptions.output,
+        dependencies.streams,
+      );
+    });
+
+  const playlist = library
+    .command('playlist')
+    .description('Edit local playlists without hand-writing YAML');
+
+  playlist
+    .command('create')
+    .description('Create an empty local playlist')
+    .argument('<title>', 'playlist title')
+    .option('--description <text>', 'playlist description', '')
+    .action(async (title: string, options: { description: string }) => {
+      const globalOptions = program.opts<{
+        output: OutputFormatValue;
+        root: string;
+      }>();
+      await runPlaylistCreate(
+        globalOptions.root,
+        title,
+        options.description,
+        globalOptions.output,
+        dependencies.streams,
+      );
+    });
+
+  playlist
+    .command('update')
+    .description('Update a playlist title or description')
+    .argument('<id>', 'TIDAL or local playlist ID')
+    .option('--title <title>', 'new playlist title')
+    .option('--description <text>', 'new playlist description')
+    .action(
+      async (id: string, options: { description?: string; title?: string }) => {
+        const globalOptions = program.opts<{
+          output: OutputFormatValue;
+          root: string;
+        }>();
+        await runPlaylistUpdate(
+          globalOptions.root,
+          id,
+          options,
+          globalOptions.output,
+          dependencies.streams,
+        );
+      },
+    );
+
+  playlist
+    .command('set-tracks')
+    .description('Replace playlist tracks from a JSON array file')
+    .argument('<id>', 'TIDAL or local playlist ID')
+    .requiredOption(
+      '--tracks-file <path>',
+      'JSON file containing track objects',
+    )
+    .action(async (id: string, options: { tracksFile: string }) => {
+      const globalOptions = program.opts<{
+        output: OutputFormatValue;
+        root: string;
+      }>();
+      await runPlaylistSetTracks(
+        globalOptions.root,
+        id,
+        options.tracksFile,
+        globalOptions.output,
+        dependencies.streams,
+      );
+    });
+
+  playlist
+    .command('delete')
+    .description('Delete a local playlist')
+    .argument('<id>', 'TIDAL or local playlist ID')
+    .action(async (id: string) => {
+      const globalOptions = program.opts<{
+        output: OutputFormatValue;
+        root: string;
+      }>();
+      await runPlaylistDelete(
+        globalOptions.root,
+        id,
+        globalOptions.output,
+        dependencies.streams,
+      );
+    });
+
+  const favorites = library
+    .command('favorites')
+    .description('Edit local favorite tracks without hand-writing YAML');
+
+  favorites
+    .command('add')
+    .description('Add favorite tracks from a JSON array file')
+    .requiredOption(
+      '--tracks-file <path>',
+      'JSON file containing track objects',
+    )
+    .action(async (options: { tracksFile: string }) => {
+      const globalOptions = program.opts<{
+        output: OutputFormatValue;
+        root: string;
+      }>();
+      await runFavoritesAdd(
+        globalOptions.root,
+        options.tracksFile,
+        globalOptions.output,
+        dependencies.streams,
+      );
+    });
+
+  favorites
+    .command('remove')
+    .description('Remove local favorites by TIDAL track ID')
+    .argument('<track-ids...>', 'one or more TIDAL track IDs')
+    .action(async (trackIds: string[]) => {
+      const globalOptions = program.opts<{
+        output: OutputFormatValue;
+        root: string;
+      }>();
+      await runFavoritesRemove(
+        globalOptions.root,
+        trackIds,
+        globalOptions.output,
+        dependencies.streams,
+      );
+    });
+
   program
     .command('validate')
     .description(
@@ -318,6 +611,14 @@ function parseExplicitFilter(value: string): 'INCLUDE' | 'EXCLUDE' {
   const normalized = value.toUpperCase();
   if (normalized !== 'INCLUDE' && normalized !== 'EXCLUDE') {
     throw new InvalidArgumentError('Expected "include" or "exclude".');
+  }
+  return normalized;
+}
+
+function parseGitHubVisibility(value: string): GitHubRepositoryVisibility {
+  const normalized = value.toLowerCase();
+  if (normalized !== 'private' && normalized !== 'public') {
+    throw new InvalidArgumentError('Expected "private" or "public".');
   }
   return normalized;
 }

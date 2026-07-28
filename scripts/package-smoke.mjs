@@ -29,6 +29,8 @@ try {
     'dist/auth/service.js',
     'dist/sync/service.js',
     'dist/tidal/playlists.js',
+    'dist/repository/service.js',
+    'dist/repository/template.js',
     'package.json',
   ]) {
     assert.ok(files.includes(required), `package is missing ${required}`);
@@ -57,6 +59,7 @@ try {
     { cwd: projectRoot, encoding: 'utf8', windowsHide: true },
   );
   assert.match(helpOutput, /Usage: tidekeeper/u);
+  assert.match(helpOutput, /repo/u);
 
   const { stdout: initOutput } = await execFileAsync(
     process.execPath,

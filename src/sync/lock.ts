@@ -1,5 +1,4 @@
 import {
-  mkdir,
   open,
   readFile,
   stat,
@@ -9,6 +8,7 @@ import {
 import { dirname, join, resolve } from 'node:path';
 
 import { ConflictError } from '../errors.js';
+import { ensureDirectory } from '../storage/yaml.js';
 
 const incompleteLockStaleAfterMs = 30_000;
 
@@ -27,7 +27,7 @@ export async function withSyncLock<T>(
 }
 
 async function acquireLock(lockPath: string): Promise<FileHandle> {
-  await mkdir(dirname(lockPath), { recursive: true });
+  await ensureDirectory(dirname(lockPath));
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const handle = await open(lockPath, 'wx');

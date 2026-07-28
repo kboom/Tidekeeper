@@ -89,7 +89,7 @@ export function fingerprintSnapshot(snapshot: LibrarySnapshot): string {
         id: playlist.id,
         localId: playlist.localId,
         title: playlist.title,
-        tracks: playlist.tracks.map((track) => ({
+        tracks: remotelyRepresentedTracks(playlist.tracks).map((track) => ({
           id: track.id,
           itemId: track.itemId,
         })),
@@ -175,7 +175,12 @@ function planPlaylists(
       });
     }
 
-    if (!sameTrackOrder(localPlaylist.tracks, remotePlaylist.tracks)) {
+    if (
+      !sameTrackOrder(
+        remotelyRepresentedTracks(localPlaylist.tracks),
+        remotePlaylist.tracks,
+      )
+    ) {
       const unavailableTrackIds = remotePlaylist.tracks
         .filter((track) => track.unavailable)
         .map((track) => track.id);
@@ -189,7 +194,9 @@ function planPlaylists(
         kind: 'playlist.replaceTracks',
         playlistId: localPlaylist.id,
         title: localPlaylist.title,
-        trackIds: localPlaylist.tracks.map((track) => track.id),
+        trackIds: remotelyRepresentedTracks(localPlaylist.tracks).map(
+          (track) => track.id,
+        ),
       });
     }
   }
@@ -205,7 +212,9 @@ function planPlaylists(
       kind: 'playlist.create',
       localId: localPlaylist.localId,
       title: localPlaylist.title,
-      trackIds: localPlaylist.tracks.map((track) => track.id),
+      trackIds: remotelyRepresentedTracks(localPlaylist.tracks).map(
+        (track) => track.id,
+      ),
     });
   }
 
@@ -235,6 +244,12 @@ function sameTrackOrder(
     left.length === right.length &&
     left.every((track, index) => track.id === right[index]?.id)
   );
+}
+
+function remotelyRepresentedTracks(
+  tracks: readonly TrackReference[],
+): TrackReference[] {
+  return tracks.filter((track) => !track.unavailable || track.itemId);
 }
 
 function comparePlaylists(

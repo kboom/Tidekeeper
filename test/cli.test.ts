@@ -6,6 +6,7 @@ import { Writable } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { runCli } from '../src/cli.js';
+import type { GitHubRepositoryPublishOptions } from '../src/repository/github.js';
 import type { SyncPlan } from '../src/sync/plan.js';
 
 class BufferStream extends Writable {
@@ -129,6 +130,170 @@ describe('CLI', () => {
 
     expect(exitCode).toBe(3);
     expect(streams.stderr.toString()).toContain('countryCode');
+  });
+
+  it('creates a repository through injected dependencies without applying remote changes', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'tidekeeper-cli-repository-'));
+    temporaryRoots.push(parent);
+    const target = join(parent, 'music');
+    const streams = createStreams();
+
+    const exitCode = await runCli(
+      [
+        'node',
+        'tidekeeper',
+        '--output',
+        'json',
+        'repo',
+        'create',
+        target,
+        '--country-code',
+        'US',
+        '--git-name',
+        'Tidekeeper Test',
+        '--git-email',
+        'test@example.com',
+      ],
+      {
+        repository: {
+          authStatus: () =>
+            Promise.resolve({ authenticated: true, grantedScopes: [] }),
+          login: () =>
+            Promise.resolve({ authenticated: true, grantedScopes: [] }),
+          publish: () =>
+            Promise.resolve({
+              owner: 'test-user',
+              repository: 'test-user/Tidal',
+              status: 'published',
+              url: 'https://github.com/test-user/Tidal',
+              visibility: 'private',
+            }),
+          remoteSnapshot: (config) =>
+            Promise.resolve({
+              config,
+              favorites: { kind: 'favorites', schemaVersion: 1, tracks: [] },
+              playlists: [],
+            }),
+        },
+        streams,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(streams.stdout.toString())).toMatchObject({
+      status: 'created',
+      target,
+      githubRepository: 'test-user/Tidal',
+    });
+  });
+
+  it('can create a local-only repository without invoking GitHub', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'tidekeeper-cli-repository-'));
+    temporaryRoots.push(parent);
+    const target = join(parent, 'local-music');
+    const streams = createStreams();
+
+    const exitCode = await runCli(
+      [
+        'node',
+        'tidekeeper',
+        '--output',
+        'json',
+        'repo',
+        'create',
+        target,
+        '--country-code',
+        'US',
+        '--git-name',
+        'Tidekeeper Test',
+        '--git-email',
+        'test@example.com',
+        '--no-github',
+      ],
+      {
+        repository: {
+          authStatus: () =>
+            Promise.resolve({ authenticated: true, grantedScopes: [] }),
+          login: () =>
+            Promise.resolve({ authenticated: true, grantedScopes: [] }),
+          publish: () => {
+            throw new Error('GitHub publishing should be disabled');
+          },
+          remoteSnapshot: (config) =>
+            Promise.resolve({
+              config,
+              favorites: { kind: 'favorites', schemaVersion: 1, tracks: [] },
+              playlists: [],
+            }),
+        },
+        streams,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(streams.stdout.toString())).toMatchObject({
+      githubRepository: null,
+      githubUrl: null,
+      githubVisibility: null,
+      status: 'created',
+      target,
+    });
+  });
+
+  it('passes GitHub publishing overrides to the retryable publish command', async () => {
+    const streams = createStreams();
+    let receivedOptions: GitHubRepositoryPublishOptions | undefined;
+
+    const exitCode = await runCli(
+      [
+        'node',
+        'tidekeeper',
+        '--root',
+        'X:\\Music',
+        '--output',
+        'json',
+        'repo',
+        'publish',
+        '--github-repo',
+        'MyMusic',
+        '--github-visibility',
+        'public',
+      ],
+      {
+        repository: {
+          authStatus: () =>
+            Promise.resolve({ authenticated: true, grantedScopes: [] }),
+          login: () =>
+            Promise.resolve({ authenticated: true, grantedScopes: [] }),
+          publish: (options) => {
+            receivedOptions = options;
+            return Promise.resolve({
+              owner: 'kboom',
+              repository: 'kboom/MyMusic',
+              status: 'published',
+              url: 'https://github.com/kboom/MyMusic',
+              visibility: 'public',
+            });
+          },
+          remoteSnapshot: () => {
+            throw new Error('TIDAL should not be read during publishing');
+          },
+        },
+        streams,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(receivedOptions).toEqual({
+      repositoryName: 'MyMusic',
+      root: 'X:\\Music',
+      visibility: 'public',
+    });
+    expect(JSON.parse(streams.stdout.toString())).toMatchObject({
+      repository: 'kboom/MyMusic',
+      status: 'published',
+      visibility: 'public',
+    });
   });
 
   it('prints injected search results as JSON Lines for agents', async () => {

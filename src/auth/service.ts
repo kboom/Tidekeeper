@@ -43,6 +43,7 @@ export type AuthStatus = {
 
 export type LoginOptions = {
   redirectUri?: string;
+  storage?: StorageAdapter;
 };
 
 export async function initializeAuth(
@@ -60,7 +61,8 @@ export async function initializeAuth(
 }
 
 export async function login(options: LoginOptions = {}): Promise<AuthStatus> {
-  await initializeAuth();
+  const storage = options.storage ?? new KeyringStorageAdapter();
+  await initializeAuth(storage);
   const redirectUri = validateRedirectUri(
     options.redirectUri ??
       process.env.TIDAL_REDIRECT_URI ??
@@ -78,14 +80,16 @@ export async function login(options: LoginOptions = {}): Promise<AuthStatus> {
     await open(loginUrl);
     const callbackUrl = await callback.result;
     await finalizeLogin(callbackUrl.search);
-    return await getAuthStatus();
+    return await getAuthStatus(storage);
   } finally {
     await closeServer(callback.server);
   }
 }
 
-export async function getAuthStatus(): Promise<AuthStatus> {
-  const storage = await initializeAuth();
+export async function getAuthStatus(
+  storage: StorageAdapter = new KeyringStorageAdapter(),
+): Promise<AuthStatus> {
+  await initializeAuth(storage);
   const persisted = await storage.load(CREDENTIALS_STORAGE_KEY);
   if (!persisted) {
     return { authenticated: false, grantedScopes: [] };
@@ -130,8 +134,10 @@ export async function logoutUser(): Promise<void> {
   await storage.remove(CREDENTIALS_STORAGE_KEY);
 }
 
-export async function getInitializedCredentialsProvider() {
-  await initializeAuth();
+export async function getInitializedCredentialsProvider(
+  storage: StorageAdapter = new KeyringStorageAdapter(),
+) {
+  await initializeAuth(storage);
   return credentialsProvider;
 }
 

@@ -662,14 +662,24 @@ describe('TIDAL adapter', () => {
     ).rejects.toBeInstanceOf(NetworkError);
   });
 
-  it('classifies a bodyless non-success response instead of exposing undefined data', async () => {
-    await expect(
-      executeTidalRequest('Rate-limited request', () =>
-        Promise.resolve({
-          response: new Response(null, { status: 429 }),
-        }),
-      ),
-    ).rejects.toThrow('Rate-limited request failed with HTTP 429');
+  it('retries a rate-limited response using Retry-After', async () => {
+    let requests = 0;
+
+    const result = await executeTidalRequest('Rate-limited request', () => {
+      requests += 1;
+      return Promise.resolve({
+        response:
+          requests === 1
+            ? new Response(null, {
+                headers: { 'Retry-After': '0' },
+                status: 429,
+              })
+            : new Response(null, { status: 204 }),
+      });
+    });
+
+    expect(result.response.status).toBe(204);
+    expect(requests).toBe(2);
   });
 });
 

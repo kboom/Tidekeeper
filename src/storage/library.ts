@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, realpath, readdir, rename, rm } from 'node:fs/promises';
+import { realpath, readdir, rename, rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import type {
@@ -16,6 +16,7 @@ import {
 } from './schema.js';
 import {
   pathExists,
+  ensureDirectory,
   readYamlFile,
   validateValue,
   writeYamlFileAtomic,
@@ -147,7 +148,7 @@ export async function recoverLibraryReplacement(root: string): Promise<void> {
     }
     const backup = backupDirectories[0];
     if (backup) {
-      await mkdir(dirname(paths.library), { recursive: true });
+      await ensureDirectory(dirname(paths.library));
       await rename(backup, paths.library);
     } else {
       const stagedLibraries = [];
@@ -164,7 +165,7 @@ export async function recoverLibraryReplacement(root: string): Promise<void> {
       }
       const stagedLibrary = stagedLibraries[0];
       if (stagedLibrary) {
-        await mkdir(dirname(paths.library), { recursive: true });
+        await ensureDirectory(dirname(paths.library));
         await rename(stagedLibrary, paths.library);
       }
     }
@@ -206,7 +207,7 @@ export async function writeLibrarySnapshot(
       );
     }
 
-    await mkdir(dirname(paths.library), { recursive: true });
+    await ensureDirectory(dirname(paths.library));
     if (await pathExists(paths.library)) {
       await rename(paths.library, backupLibrary);
       movedExistingLibrary = true;

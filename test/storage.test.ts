@@ -9,7 +9,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, parse, resolve } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -29,6 +29,7 @@ import {
   playlistDocumentSchema,
 } from '../src/storage/schema.js';
 import {
+  ensureDirectory,
   readYamlFile,
   serializeYaml,
   writeYamlFileAtomic,
@@ -64,9 +65,16 @@ describe('library storage', () => {
       },
       playlists: [],
     });
+
     await expect(readFile(paths.config, 'utf8')).resolves.toContain(
       'countryCode: US',
     );
+  });
+
+  it('accepts an existing filesystem root as a writable parent directory', async () => {
+    await expect(
+      ensureDirectory(parse(resolve(process.cwd())).root),
+    ).resolves.toBeUndefined();
   });
 
   it('serializes playlist YAML deterministically', () => {

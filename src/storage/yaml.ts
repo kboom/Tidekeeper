@@ -76,10 +76,10 @@ export async function writeTextFileAtomic(
   path: string,
   text: string,
 ): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
   const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
+    await ensureDirectory(dirname(path));
     handle = await open(temporaryPath, 'wx', 0o600);
     await handle.writeFile(text, 'utf8');
     await handle.sync();
@@ -95,16 +95,40 @@ export async function writeTextFileAtomic(
   }
 }
 
+export async function ensureDirectory(path: string): Promise<void> {
+  try {
+    const details = await stat(path);
+    if (!details.isDirectory()) {
+      throw new ValidationError(`${path} is not a directory.`);
+    }
+    return;
+  } catch (error: unknown) {
+    if (!hasErrorCode(error, 'ENOENT')) {
+      throw error;
+    }
+  }
+  await mkdir(path, { recursive: true });
+}
+
 export async function pathExists(path: string): Promise<boolean> {
   try {
     await stat(path);
     return true;
   } catch (error: unknown) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+    if (hasErrorCode(error, 'ENOENT')) {
       return false;
     }
     throw error;
   }
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === code
+  );
 }
 
 function formatIssues(issues: readonly z.core.$ZodIssue[]): string {

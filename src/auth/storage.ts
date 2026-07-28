@@ -20,3 +20,21 @@ export class KeyringStorageAdapter implements StorageAdapter {
     return new AsyncEntry(KEYRING_SERVICE, key);
   }
 }
+
+export class MemoryStorageAdapter implements StorageAdapter {
+  readonly #values = new Map<string, string>();
+
+  load(key: string): Promise<string | null> {
+    return Promise.resolve(this.#values.get(key) ?? null);
+  }
+
+  remove(key: string): Promise<void> {
+    this.#values.delete(key);
+    return Promise.resolve();
+  }
+
+  save(key: string, value: string): Promise<void> {
+    this.#values.set(key, value);
+    return Promise.resolve();
+  }
+}

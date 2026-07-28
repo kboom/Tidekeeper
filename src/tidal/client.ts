@@ -1,7 +1,11 @@
 import { createAPIClient } from '@tidal-music/api';
 import type { CredentialsProvider } from '@tidal-music/common';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { AuthenticationError, ConflictError, NetworkError } from '../errors.js';
+
+const maxRateLimitAttempts = 6;
+const maxRetryDelayMs = 60_000;
 
 export type CreateTidalClientOptions = {
   credentialsProvider: CredentialsProvider;
@@ -62,8 +66,27 @@ export async function executeTidalRequest<T extends TidalApiResponse>(
   operation: string,
   request: () => Promise<T>,
 ): Promise<T> {
-  try {
-    const response = await request();
+  for (let attempt = 0; ; attempt += 1) {
+    let response: T;
+    try {
+      response = await request();
+    } catch (error: unknown) {
+      if (
+        error instanceof AuthenticationError ||
+        error instanceof ConflictError ||
+        error instanceof NetworkError
+      ) {
+        throw error;
+      }
+      throwForTidalError(error, operation);
+    }
+    if (
+      response.response.status === 429 &&
+      attempt < maxRateLimitAttempts - 1
+    ) {
+      await delay(rateLimitDelayMs(response.response, attempt));
+      continue;
+    }
     if (!response.response.ok) {
       throwForTidalError(
         response.error ?? {
@@ -74,8 +97,6 @@ export async function executeTidalRequest<T extends TidalApiResponse>(
       );
     }
     return response;
-  } catch (error: unknown) {
-    throwForTidalError(error, operation);
   }
 }
 
@@ -113,4 +134,19 @@ function isTidalError(value: unknown): value is TidalError {
       ('detail' in value && typeof value.detail === 'string') ||
       ('title' in value && typeof value.title === 'string'))
   );
+}
+
+function rateLimitDelayMs(response: Response, attempt: number): number {
+  const retryAfter = response.headers.get('Retry-After');
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return Math.min(seconds * 1_000, maxRetryDelayMs);
+    }
+    const date = Date.parse(retryAfter);
+    if (!Number.isNaN(date)) {
+      return Math.min(Math.max(date - Date.now(), 0), maxRetryDelayMs);
+    }
+  }
+  return Math.min(2 ** attempt * 1_000, maxRetryDelayMs);
 }

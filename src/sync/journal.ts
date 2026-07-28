@@ -18,6 +18,7 @@ const trackSchema = z
     itemId: z.string().optional(),
     tidalUrl: z.string().optional(),
     title: z.string(),
+    unavailable: z.boolean().optional(),
   })
   .strict();
 

@@ -10,6 +10,7 @@ Tidekeeper synchronizes library metadata. It does not download audio files.
 
 - Node.js 22.13 or newer
 - Git
+- GitHub CLI (`gh`), authenticated to `github.com`, for automatic repository publishing
 - A registered application from the
   [TIDAL Developer Portal](https://developer.tidal.com/)
 - A TIDAL redirect URI registered as
@@ -87,6 +88,124 @@ library/
 ```
 
 Commit `tidekeeper.yaml` and `library/**`. Do not commit `.tidekeeper/**`.
+
+## Create an agent-ready music repository
+
+`repo create` builds a new Git repository from an embedded, versioned template,
+imports the authenticated TIDAL snapshot, makes two reviewable commits, and
+publishes them to a private `Tidal` repository under the active personal GitHub
+account. The first commit contains the agent guidance and empty library skeleton;
+the second contains the imported favorites and playlists. It never mutates TIDAL.
+
+```console
+tidekeeper repo create X:\Tidal --country-code US
+```
+
+Override the GitHub repository name or visibility, or keep the repository local:
+
+```console
+tidekeeper repo create X:\Tidal --country-code US --github-repo MyMusic
+tidekeeper repo create X:\Tidal --country-code US --github-visibility public
+tidekeeper repo create X:\Tidal --country-code US --no-github
+```
+
+When Git identity is not configured globally, provide it only for the generated
+repository:
+
+```console
+tidekeeper repo create X:\Tidal --country-code US `
+  --git-name "Your Name" --git-email you@example.com
+```
+
+On a Windows machine where the credential manager is unavailable, use
+`--ephemeral-session`. This opens OAuth normally but keeps the resulting
+credentials only in process memory for the duration of repository creation:
+
+```console
+tidekeeper repo create X:\Tidal --country-code US --ephemeral-session
+```
+
+The destination must not already exist. Creation uses a sibling staging
+directory and makes it visible only after the import, validation, and both
+commits succeed. GitHub publishing starts afterward, so a GitHub failure never
+deletes completed local work. Resume an interrupted create/push safely with:
+
+```console
+tidekeeper --root X:\Tidal repo publish
+```
+
+Publishing reuses an empty matching personal repository, validates an existing
+`origin`, and refuses to attach an unrelated or non-empty repository.
+
+The generated repository includes:
+
+```text
+.github/copilot-instructions.md
+.github/skills/
+  music-library-audit/
+  playlist-curator/
+  music-discovery/
+  tidal-sync-review/
+.github/workflows/validate-music-library.yml
+.tidekeeper-template.json
+music-preferences.md
+```
+
+`music-preferences.md` is user-owned guidance for agents. The generated Copilot
+instructions and skills may inspect, validate, edit, and commit local YAML, but
+they must never run `sync push --apply`. They provide a reviewed plan and exact
+human-run command instead. `repo verify` validates the local data, Git worktree,
+template ownership hashes, required skill files, and secret/state ignore rules.
+`repo upgrade` updates only unmodified generated files and preserves music data
+and preferences.
+
+Until Tidekeeper is published to the configured npm registry, generated
+repositories attach to the local Tidekeeper build that created them. Their
+`npm run tidekeeper -- ...`, `npm run verify`, and `npm run sync:plan` commands
+therefore work immediately in a new Copilot session on the same machine without
+an npm install. If the local source checkout moves or the repository is cloned
+to another machine, run `tidekeeper --root <music-repository> repo upgrade` from
+an available Tidekeeper source checkout to attach its local runtime.
+
+```console
+cd X:\Tidal
+tidekeeper --output json repo verify
+tidekeeper --output json repo upgrade
+```
+
+## Agent-safe local edits
+
+Agents and automation should use typed local commands rather than hand-writing
+the YAML schema. Every mutation holds the normal per-library lock, loads the
+complete validated snapshot, atomically replaces it, and returns a fingerprint.
+Track batches are JSON files, which avoids interpolating music metadata through
+shell arguments.
+
+```console
+tidekeeper --output json library summary
+tidekeeper --output json library playlist create "Deep Focus" --description "No vocals"
+tidekeeper --output json library playlist update <playlist-id> --title "Focus"
+tidekeeper --output json library playlist set-tracks <playlist-id> --tracks-file tracks.json
+tidekeeper --output json library playlist delete <playlist-id>
+tidekeeper --output json library favorites add --tracks-file tracks.json
+tidekeeper --output json library favorites remove <track-id> [<track-id>...]
+```
+
+The tracks file is a JSON array of Tidekeeper track objects, for example:
+
+```json
+[
+  {
+    "artists": ["Example Artist"],
+    "id": "123456789",
+    "title": "Example Track"
+  }
+]
+```
+
+Local edits do not contact TIDAL. Use `sync plan` afterward, then commit the
+reviewed diff. A playlist containing an unavailable track cannot be rewritten,
+which prevents a later remote replacement from dropping that item.
 
 ## Search tracks
 
@@ -206,6 +325,12 @@ tidekeeper sync plan
 tidekeeper sync push [--apply] [--allow-removals] [--allow-dirty]
 tidekeeper init [--country-code CC]
 tidekeeper validate
+tidekeeper repo create <directory> --country-code CC
+tidekeeper repo verify
+tidekeeper repo upgrade
+tidekeeper library summary
+tidekeeper library playlist <create|update|set-tracks|delete>
+tidekeeper library favorites <add|remove>
 ```
 
 Run `tidekeeper <command> --help` for command-specific options.

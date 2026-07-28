@@ -119,6 +119,53 @@ describe('sync planning', () => {
     expect(buildSyncPlan(local, remote).operations).toEqual([]);
   });
 
+  it('preserves local-only unavailable assignments without pushing them', () => {
+    const local = snapshot({
+      favoriteIds: [],
+      playlists: [
+        {
+          description: '',
+          id: null,
+          kind: 'playlist',
+          localId: '6d27c06c-18ce-46bb-a1ed-c0064bee7562',
+          schemaVersion: 1,
+          title: 'Local',
+          tracks: [
+            { ...track('missing'), unavailable: true },
+            track('available'),
+          ],
+        },
+      ],
+    });
+
+    const create = buildSyncPlan(
+      local,
+      snapshot({ favoriteIds: [], playlists: [] }),
+    ).operations[0];
+    expect(create).toMatchObject({
+      kind: 'playlist.create',
+      trackIds: ['available'],
+    });
+
+    const mapped = structuredClone(local);
+    const mappedPlaylist = mapped.playlists[0];
+    if (!mappedPlaylist) {
+      throw new Error('Expected mapped playlist fixture.');
+    }
+    mappedPlaylist.id = 'remote-playlist';
+    const remote = snapshot({
+      favoriteIds: [],
+      playlists: [playlist('remote-playlist', 'Local', ['available'])],
+    });
+    expect(buildSyncPlan(mapped, remote).operations).toEqual([]);
+    const persisted = structuredClone(remote);
+    persisted.playlists[0]?.tracks.unshift({
+      ...track('missing'),
+      unavailable: true,
+    });
+    expect(fingerprintSnapshot(persisted)).toBe(fingerprintSnapshot(remote));
+  });
+
   it('blocks a track-list rewrite that could remove unavailable playlist items', () => {
     const remote = snapshot({
       favoriteIds: [],
@@ -157,6 +204,36 @@ describe('resumable push', () => {
         .map((root) => rm(root, { force: true, recursive: true })),
       ...servers.splice(0).map((server) => closeServer(server)),
     ]);
+  });
+
+  it('journals playlist deletions containing unavailable tracks', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tidekeeper-journal-'));
+    roots.push(root);
+    const remote = snapshot({
+      favoriteIds: [],
+      playlists: [playlist('delete', 'Delete me', ['missing'])],
+    });
+    const unavailable = remote.playlists[0]?.tracks[0];
+    if (!unavailable) {
+      throw new Error('Expected unavailable playlist fixture track.');
+    }
+    unavailable.unavailable = true;
+    const plan = buildSyncPlan(
+      snapshot({ favoriteIds: [], playlists: [] }),
+      remote,
+    );
+
+    await expect(
+      savePushJournal(root, {
+        completedOperations: [],
+        createdPlaylistIds: {},
+        initialLocalContentFingerprint: 'local',
+        phase: 'applying',
+        plan,
+        startedOperations: [],
+        version: 2,
+      }),
+    ).resolves.toBeUndefined();
   });
 
   describe('sync locking', () => {
@@ -225,7 +302,11 @@ describe('resumable push', () => {
 
     await expect(
       pushLocal(client, root, { allowRemovals: true }),
-    ).rejects.toBeInstanceOf(PartialApplyError);
+    ).rejects.toMatchObject({
+      message: expect.stringContaining(
+        'Adding TIDAL favorite tracks failed with HTTP 503: Response lost after commit',
+      ),
+    });
     expect(favoriteIds).toEqual(new Set(['1', '2']));
     expect(
       await pathExists(join(root, '.tidekeeper', 'journal', 'push.json')),
@@ -370,6 +451,108 @@ describe('resumable push', () => {
 
     expect(result.appliedOperations).toBe(1);
     expect(mutationRequests).toBe(0);
+    expect(
+      await pathExists(join(root, '.tidekeeper', 'journal', 'push.json')),
+    ).toBe(false);
+  });
+
+  it('preserves local-only unavailable tracks when finalization resumes', async () => {
+    const root = await createInitializedRoot(roots);
+    const initialized = await loadLibrary(root);
+    const local = snapshot({
+      favoriteIds: [],
+      playlists: [
+        {
+          ...playlist('remote-playlist', 'Local', ['available']),
+          localId: '6d27c06c-18ce-46bb-a1ed-c0064bee7562',
+          tracks: [
+            { ...track('missing'), unavailable: true },
+            {
+              ...track('available'),
+              itemId: 'remote-playlist-item-0',
+            },
+          ],
+        },
+      ],
+    });
+    local.config = initialized.config;
+    await writeLibrarySnapshot(root, local);
+    await commitAll(root, 'Add local-only unavailable track');
+
+    const finalRemote = snapshot({
+      favoriteIds: [],
+      playlists: [playlist('remote-playlist', 'Local', ['available'])],
+    });
+    finalRemote.config = local.config;
+    const plan = buildSyncPlan(local, finalRemote);
+    expect(plan.operations).toEqual([]);
+    await savePushJournal(root, {
+      completedOperations: [],
+      createdPlaylistIds: {},
+      finalRemoteContentFingerprint: fingerprintSnapshotContent(local),
+      finalRemoteFingerprint: fingerprintSnapshot(finalRemote),
+      initialLocalContentFingerprint: fingerprintSnapshotContent(local),
+      phase: 'finalizing',
+      plan,
+      startedOperations: [],
+      version: 2,
+    });
+
+    let mutationRequests = 0;
+    const server = createServer((request, response) => {
+      if (request.method !== 'GET') {
+        mutationRequests += 1;
+      }
+      const url = new URL(request.url ?? '/', 'http://localhost');
+      if (url.pathname === '/v2/playlists') {
+        respondJson(response, {
+          data: [
+            {
+              attributes: { description: '', name: 'Local' },
+              id: 'remote-playlist',
+              type: 'playlists',
+            },
+          ],
+          links: { self: '/playlists' },
+        });
+        return;
+      }
+      if (
+        url.pathname === '/v2/playlists/remote-playlist/relationships/items'
+      ) {
+        respondJson(response, {
+          data: [
+            {
+              id: 'available',
+              meta: { itemId: 'remote-playlist-item-0' },
+              type: 'tracks',
+            },
+          ],
+          links: { self: url.pathname },
+        });
+        return;
+      }
+      handleSnapshotRead(url, response, []);
+    });
+    servers.push(server);
+    const client = createTidalClient({
+      apiBaseUrl: `${await listen(server)}/v2`,
+      credentialsProvider,
+    });
+
+    const result = await pushLocal(client, root);
+
+    expect(result.appliedOperations).toBe(0);
+    expect(mutationRequests).toBe(0);
+    const synchronized = await loadLibrary(root);
+    expect(synchronized.playlists[0]).toMatchObject({
+      id: 'remote-playlist',
+      localId: '6d27c06c-18ce-46bb-a1ed-c0064bee7562',
+      tracks: [
+        { id: 'missing', unavailable: true },
+        { id: 'available', itemId: 'remote-playlist-item-0' },
+      ],
+    });
     expect(
       await pathExists(join(root, '.tidekeeper', 'journal', 'push.json')),
     ).toBe(false);

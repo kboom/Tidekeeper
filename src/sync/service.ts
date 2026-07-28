@@ -1,4 +1,8 @@
-import type { LibrarySnapshot, TrackReference } from '../domain.js';
+import type {
+  LibrarySnapshot,
+  PlaylistDocument,
+  TrackReference,
+} from '../domain.js';
 import {
   AuthenticationError,
   ConflictError,
@@ -218,14 +222,19 @@ async function applyJournal(
       await savePushJournal(root, journal);
     }
 
-    const synchronized = await getCompletedRemoteSnapshot(
+    const completedRemote = await getCompletedRemoteSnapshot(
       client,
       local,
       journal,
     );
+    const synchronized = createSynchronizedSnapshot(
+      local,
+      journal,
+      completedRemote,
+    );
     journal.finalRemoteContentFingerprint =
       fingerprintSnapshotContent(synchronized);
-    journal.finalRemoteFingerprint = fingerprintSnapshot(synchronized);
+    journal.finalRemoteFingerprint = fingerprintSnapshot(completedRemote);
     journal.phase = 'finalizing';
     await savePushJournal(root, journal);
     await writeLibrarySnapshot(root, synchronized);
@@ -261,13 +270,14 @@ async function resumeFinalization(
   } catch (error: unknown) {
     throwAsPartialApply(error);
   }
+  const synchronized = createSynchronizedSnapshot(local, journal, remote);
   if (fingerprintSnapshot(remote) !== journal.finalRemoteFingerprint) {
     try {
       journal.finalRemoteContentFingerprint =
-        fingerprintSnapshotContent(remote);
+        fingerprintSnapshotContent(synchronized);
       journal.finalRemoteFingerprint = fingerprintSnapshot(remote);
       await savePushJournal(root, journal);
-      await writeLibrarySnapshot(root, remote);
+      await writeLibrarySnapshot(root, synchronized);
       await deletePushJournal(root);
     } catch (error: unknown) {
       throwAsPartialApply(error);
@@ -278,7 +288,7 @@ async function resumeFinalization(
   }
 
   try {
-    await writeLibrarySnapshot(root, remote);
+    await writeLibrarySnapshot(root, synchronized);
     await deletePushJournal(root);
   } catch (error: unknown) {
     throwAsPartialApply(error);
@@ -287,6 +297,17 @@ async function resumeFinalization(
     appliedOperations: journal.plan.operations.length,
     plan: journal.plan,
   };
+}
+
+function createSynchronizedSnapshot(
+  local: LibrarySnapshot,
+  journal: PushJournal,
+  remote: LibrarySnapshot,
+): LibrarySnapshot {
+  return mergeLocalOnlyUnavailableTracks(
+    mapCreatedPlaylistIds(local, journal),
+    remote,
+  );
 }
 
 export async function snapshotForPullPreview(
@@ -412,25 +433,7 @@ function assertResumeCompatible(
   remote: LibrarySnapshot,
   journal: PushJournal,
 ): void {
-  const mappedLocal = structuredClone(local);
-  for (const [indexText, playlistId] of Object.entries(
-    journal.createdPlaylistIds,
-  )) {
-    const operation = journal.plan.operations[Number(indexText)];
-    if (operation?.kind !== 'playlist.create') {
-      throw new ConflictError('The push journal has an invalid playlist map.');
-    }
-    const playlist = mappedLocal.playlists.find(
-      (candidate) => candidate.localId === operation.localId,
-    );
-    if (!playlist) {
-      throw new ConflictError(
-        `The local playlist ${operation.localId} is missing while resuming.`,
-      );
-    }
-    playlist.id = playlistId;
-  }
-
+  const mappedLocal = mapCreatedPlaylistIds(local, journal);
   let currentOperations: SyncOperation[];
   try {
     currentOperations = buildSyncPlan(mappedLocal, remote).operations;
@@ -462,6 +465,77 @@ function assertResumeCompatible(
     }
     expectedIndex += 1;
   }
+}
+
+function mapCreatedPlaylistIds(
+  local: LibrarySnapshot,
+  journal: PushJournal,
+): LibrarySnapshot {
+  const mappedLocal = structuredClone(local);
+  for (const [indexText, playlistId] of Object.entries(
+    journal.createdPlaylistIds,
+  )) {
+    const operation = journal.plan.operations[Number(indexText)];
+    if (operation?.kind !== 'playlist.create') {
+      throw new ConflictError('The push journal has an invalid playlist map.');
+    }
+    const playlist = mappedLocal.playlists.find(
+      (candidate) => candidate.localId === operation.localId,
+    );
+    if (!playlist) {
+      throw new ConflictError(
+        `The local playlist ${operation.localId} is missing while resuming.`,
+      );
+    }
+    playlist.id = playlistId;
+  }
+  return mappedLocal;
+}
+
+function mergeLocalOnlyUnavailableTracks(
+  local: LibrarySnapshot,
+  remote: LibrarySnapshot,
+): LibrarySnapshot {
+  const merged = structuredClone(remote);
+  const localById = new Map(
+    local.playlists
+      .filter(
+        (playlist): playlist is PlaylistDocument & { id: string } =>
+          playlist.id !== null,
+      )
+      .map((playlist) => [playlist.id, playlist]),
+  );
+  for (const remotePlaylist of merged.playlists) {
+    if (!remotePlaylist.id) {
+      continue;
+    }
+    const localPlaylist = localById.get(remotePlaylist.id);
+    if (!localPlaylist) {
+      continue;
+    }
+    const remoteTracks = remotePlaylist.tracks;
+    let remoteIndex = 0;
+    remotePlaylist.localId = localPlaylist.localId;
+    remotePlaylist.tracks = localPlaylist.tracks.map((localTrack) => {
+      if (localTrack.unavailable && !localTrack.itemId) {
+        return localTrack;
+      }
+      const remoteTrack = remoteTracks[remoteIndex];
+      remoteIndex += 1;
+      if (!remoteTrack) {
+        throw new ConflictError(
+          `TIDAL playlist ${remotePlaylist.id} is missing an available track after push completion.`,
+        );
+      }
+      return remoteTrack;
+    });
+    if (remoteIndex !== remoteTracks.length) {
+      throw new ConflictError(
+        `TIDAL playlist ${remotePlaylist.id} contains unexpected tracks after push completion.`,
+      );
+    }
+  }
+  return merged;
 }
 
 function operationsAreResumeCompatible(
@@ -630,8 +704,9 @@ function throwAsPartialApply(error: unknown): never {
   if (error instanceof AuthenticationError || error instanceof ConflictError) {
     throw error;
   }
+  const detail = error instanceof Error ? ` Cause: ${error.message}` : '';
   throw new PartialApplyError(
-    'The push did not complete. Its journal was preserved; re-run the same push to resume safely.',
+    `The push did not complete. Its journal was preserved; re-run the same push to resume safely.${detail}`,
     { cause: error },
   );
 }
