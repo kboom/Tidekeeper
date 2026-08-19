@@ -236,6 +236,42 @@ describe('resumable push', () => {
     ).resolves.toBeUndefined();
   });
 
+  it('journals exact audio metadata in current playlist tracks', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tidekeeper-journal-audio-'));
+    roots.push(root);
+    const remote = snapshot({
+      favoriteIds: [],
+      playlists: [playlist('quality', 'Top Quality', ['1'])],
+    });
+    const currentTrack = remote.playlists[0]?.tracks[0];
+    if (!currentTrack) {
+      throw new Error('Expected playlist fixture track.');
+    }
+    currentTrack.audio = {
+      bitDepth: 24,
+      format: 'FLAC_HIRES',
+      mediaTags: ['HIRES_LOSSLESS'],
+      sampleRateHz: 96_000,
+    };
+    const local = snapshot({
+      favoriteIds: [],
+      playlists: [playlist('quality', 'Top Quality', ['1', '2'])],
+    });
+    const plan = buildSyncPlan(local, remote);
+
+    await expect(
+      savePushJournal(root, {
+        completedOperations: [],
+        createdPlaylistIds: {},
+        initialLocalContentFingerprint: 'local',
+        phase: 'applying',
+        plan,
+        startedOperations: [],
+        version: 2,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   describe('sync locking', () => {
     it('rejects overlapping mutations for the same library', async () => {
       const root = await mkdtemp(join(tmpdir(), 'tidekeeper-lock-'));
@@ -456,6 +492,45 @@ describe('resumable push', () => {
     ).toBe(false);
   });
 
+  it('preserves exact favorite audio metadata during zero-operation finalization', async () => {
+    const root = await createInitializedRoot(roots, ['1']);
+    const local = await loadLibrary(root);
+    const favorite = local.favorites.tracks[0];
+    if (!favorite) {
+      throw new Error('Expected favorite fixture track.');
+    }
+    favorite.audio = {
+      bitDepth: 24,
+      format: 'FLAC_HIRES',
+      mediaTags: ['HIRES_LOSSLESS'],
+      sampleRateHz: 96_000,
+    };
+    await writeLibrarySnapshot(root, local);
+
+    const server = createServer((request, response) => {
+      handleSnapshotRead(
+        new URL(request.url ?? '/', 'http://localhost'),
+        response,
+        ['1'],
+      );
+    });
+    servers.push(server);
+    const client = createTidalClient({
+      apiBaseUrl: `${await listen(server)}/v2`,
+      credentialsProvider,
+    });
+
+    const result = await pushLocal(client, root, { allowDirty: true });
+
+    expect(result.appliedOperations).toBe(0);
+    expect((await loadLibrary(root)).favorites.tracks[0]?.audio).toEqual({
+      bitDepth: 24,
+      format: 'FLAC_HIRES',
+      mediaTags: ['HIRES_LOSSLESS'],
+      sampleRateHz: 96_000,
+    });
+  });
+
   it('preserves local-only unavailable tracks when finalization resumes', async () => {
     const root = await createInitializedRoot(roots);
     const initialized = await loadLibrary(root);
@@ -469,6 +544,12 @@ describe('resumable push', () => {
             { ...track('missing'), unavailable: true },
             {
               ...track('available'),
+              audio: {
+                bitDepth: 24,
+                format: 'FLAC_HIRES',
+                mediaTags: ['HIRES_LOSSLESS'],
+                sampleRateHz: 96_000,
+              },
               itemId: 'remote-playlist-item-0',
             },
           ],
@@ -550,7 +631,16 @@ describe('resumable push', () => {
       localId: '6d27c06c-18ce-46bb-a1ed-c0064bee7562',
       tracks: [
         { id: 'missing', unavailable: true },
-        { id: 'available', itemId: 'remote-playlist-item-0' },
+        {
+          audio: {
+            bitDepth: 24,
+            format: 'FLAC_HIRES',
+            mediaTags: ['HIRES_LOSSLESS'],
+            sampleRateHz: 96_000,
+          },
+          id: 'available',
+          itemId: 'remote-playlist-item-0',
+        },
       ],
     });
     expect(

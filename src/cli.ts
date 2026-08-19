@@ -2,6 +2,7 @@ import { Command, CommanderError, InvalidArgumentError } from 'commander';
 
 import {
   getAuthStatus,
+  getInitializedCredentialsProvider,
   login,
   logoutUser,
   type AuthStatus,
@@ -27,6 +28,12 @@ import {
   type SearchTracksHandler,
 } from './commands/search.js';
 import {
+  runInspectTracks,
+  runRelatedTracks,
+  type InspectTracksHandler,
+  type RelatedTracksHandler,
+} from './commands/tracks.js';
+import {
   type SyncHandlers,
   writePullResult,
   writePushResult,
@@ -34,7 +41,7 @@ import {
 } from './commands/sync.js';
 import { runValidate } from './commands/validate.js';
 import type { TrackReference } from './domain.js';
-import { ExitCode, TidekeeperError } from './errors.js';
+import { AuthenticationError, ExitCode, TidekeeperError } from './errors.js';
 import {
   defaultStreams,
   OutputFormat,
@@ -46,6 +53,16 @@ import {
 } from './output.js';
 import { planPush, pullRemote, pushLocal } from './sync/service.js';
 import { createAuthenticatedTidalClient } from './tidal/authenticated.js';
+import { createTidalClient } from './tidal/client.js';
+import {
+  inspectTrackQuality,
+  type InspectTracksOptions,
+  loadPlaybackAudioQuality,
+} from './tidal/quality.js';
+import {
+  findRelatedTracks,
+  type RelatedTracksOptions,
+} from './tidal/related.js';
 import { searchTracks, type SearchTracksOptions } from './tidal/search.js';
 import type { RepositoryCreateDependencies } from './repository/service.js';
 import type { GitHubRepositoryVisibility } from './repository/github.js';
@@ -56,6 +73,8 @@ export type CliDependencies = {
     logout(): Promise<void>;
     status(): Promise<AuthStatus>;
   };
+  inspectTracks?: InspectTracksHandler;
+  relatedTracks?: RelatedTracksHandler;
   searchTracks?: SearchTracksHandler;
   repository?: RepositoryCreateDependencies;
   streams: OutputStreams;
@@ -167,6 +186,96 @@ export function createProgram(
           },
           dependencies.streams,
           dependencies.searchTracks ?? searchTracksWithDefaultClient,
+        );
+      },
+    );
+
+  const tracks = program
+    .command('tracks')
+    .description('Inspect TIDAL track metadata');
+
+  tracks
+    .command('inspect')
+    .description(
+      'Inspect exact audio quality for tracks from a JSON array file',
+    )
+    .requiredOption(
+      '--tracks-file <path>',
+      'JSON file containing track objects',
+    )
+    .option(
+      '--media-tag <tag>',
+      'prefilter candidates by TIDAL media tag',
+      'HIRES_LOSSLESS',
+    )
+    .option(
+      '--min-bit-depth <number>',
+      'minimum exact bit depth',
+      parsePositiveInteger,
+      24,
+    )
+    .option(
+      '--min-sample-rate <number>',
+      'minimum exact sample rate in Hz',
+      parsePositiveInteger,
+      80_000,
+    )
+    .action(
+      async (options: {
+        mediaTag: string;
+        minBitDepth: number;
+        minSampleRate: number;
+        tracksFile: string;
+      }) => {
+        const globalOptions = program.opts<{ output: OutputFormatValue }>();
+        await runInspectTracks(
+          options.tracksFile,
+          {
+            mediaTag: options.mediaTag,
+            minBitDepth: options.minBitDepth,
+            minSampleRateHz: options.minSampleRate,
+            output: globalOptions.output,
+          },
+          dependencies.streams,
+          dependencies.inspectTracks ?? inspectTracksWithDefaultClient,
+        );
+      },
+    );
+
+  tracks
+    .command('related')
+    .description('Find tracks from the same albums or artists as seed tracks')
+    .requiredOption(
+      '--tracks-file <path>',
+      'JSON file containing seed track objects',
+    )
+    .requiredOption(
+      '--by <relation>',
+      'relationship to expand: album or artist',
+      parseRelatedTrackSource,
+    )
+    .option(
+      '--limit-per-source <number>',
+      'maximum tracks returned from each album or artist',
+      parsePositiveInteger,
+      50,
+    )
+    .action(
+      async (options: {
+        by: RelatedTracksOptions['by'];
+        limitPerSource: number;
+        tracksFile: string;
+      }) => {
+        const globalOptions = program.opts<{ output: OutputFormatValue }>();
+        await runRelatedTracks(
+          options.tracksFile,
+          {
+            by: options.by,
+            limitPerSource: options.limitPerSource,
+            output: globalOptions.output,
+          },
+          dependencies.streams,
+          dependencies.relatedTracks ?? relatedTracksWithDefaultClient,
         );
       },
     );
@@ -577,6 +686,42 @@ async function searchTracksWithDefaultClient(
   return searchTracks(await createAuthenticatedTidalClient(), query, options);
 }
 
+async function inspectTracksWithDefaultClient(
+  tracks: readonly TrackReference[],
+  options: InspectTracksOptions,
+) {
+  const credentialsProvider = await getInitializedCredentialsProvider();
+  return inspectTrackQuality(
+    createTidalClient({ credentialsProvider }),
+    tracks,
+    options,
+    async (trackId) => {
+      const credentials = await credentialsProvider.getCredentials();
+      if (!credentials.token) {
+        throw new AuthenticationError(
+          'The stored TIDAL session has no access token. Log in again.',
+        );
+      }
+      return loadPlaybackAudioQuality(
+        credentials.token,
+        credentials.clientId,
+        trackId,
+      );
+    },
+  );
+}
+
+async function relatedTracksWithDefaultClient(
+  tracks: readonly TrackReference[],
+  options: RelatedTracksOptions,
+): Promise<TrackReference[]> {
+  return findRelatedTracks(
+    await createAuthenticatedTidalClient(),
+    tracks,
+    options,
+  );
+}
+
 const defaultSyncHandlers: SyncHandlers = {
   plan: async (root) => planPush(await createAuthenticatedTidalClient(), root),
   pull: async (root, apply, force) =>
@@ -613,6 +758,13 @@ function parseExplicitFilter(value: string): 'INCLUDE' | 'EXCLUDE' {
     throw new InvalidArgumentError('Expected "include" or "exclude".');
   }
   return normalized;
+}
+
+function parseRelatedTrackSource(value: string): RelatedTracksOptions['by'] {
+  if (value === 'album' || value === 'artist') {
+    return value;
+  }
+  throw new InvalidArgumentError('Expected album or artist.');
 }
 
 function parseGitHubVisibility(value: string): GitHubRepositoryVisibility {

@@ -223,6 +223,32 @@ specified. Results are bulk-hydrated per page and retain TIDAL result order.
 JSON Lines emits one track object per line and is the recommended format for
 LLM agents processing large result sets.
 
+## Inspect and expand track candidates
+
+Track files are JSON arrays using the same objects returned by structured
+search. Exact quality inspection first filters candidates by TIDAL media tag,
+then reads bit depth and sample rate from the in-memory DASH manifest without
+downloading audio:
+
+```console
+tidekeeper --output json tracks inspect --tracks-file tracks.json
+tidekeeper --output json tracks inspect --tracks-file tracks.json \
+  --media-tag HIRES_LOSSLESS --min-bit-depth 24 --min-sample-rate 80000
+```
+
+Qualified tracks include an optional `audio` block containing media tags,
+format, bit depth, and sample rate. Rejections distinguish unavailable tracks,
+missing media tags, insufficient exact quality, and inspection failures.
+
+Use related-track discovery to expand seed tracks through their albums or
+artists before inspecting the resulting candidates:
+
+```console
+tidekeeper --output json tracks related --tracks-file seeds.json --by album
+tidekeeper --output json tracks related --tracks-file seeds.json --by artist \
+  --limit-per-source 50
+```
+
 ## Edit and push
 
 Track and playlist IDs are authoritative. Titles, artists, album names,
@@ -321,6 +347,8 @@ tidekeeper auth login [--redirect-uri URI]
 tidekeeper auth status
 tidekeeper auth logout
 tidekeeper search tracks <query> [--limit N] [--country-code CC]
+tidekeeper tracks inspect --tracks-file FILE [--media-tag TAG] [--min-bit-depth N] [--min-sample-rate N]
+tidekeeper tracks related --tracks-file FILE --by <album|artist> [--limit-per-source N]
 tidekeeper sync pull [--apply] [--force]
 tidekeeper sync plan
 tidekeeper sync push [--apply] [--allow-removals] [--allow-dirty]

@@ -4,23 +4,9 @@ import { join } from 'node:path';
 import { z } from 'zod';
 
 import { ValidationError } from '../errors.js';
+import { trackReferenceSchema } from '../storage/schema.js';
 import { pathExists, writeTextFileAtomic } from '../storage/yaml.js';
 import type { SyncPlan } from './plan.js';
-
-const trackSchema = z
-  .object({
-    addedAt: z.string().optional(),
-    album: z.string().optional(),
-    artists: z.array(z.string()),
-    durationSeconds: z.number().optional(),
-    explicit: z.boolean().optional(),
-    id: z.string(),
-    itemId: z.string().optional(),
-    tidalUrl: z.string().optional(),
-    title: z.string(),
-    unavailable: z.boolean().optional(),
-  })
-  .strict();
 
 const operationSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -40,13 +26,13 @@ const operationSchema = z.discriminatedUnion('kind', [
   }),
   z.object({
     currentDescription: z.string(),
-    currentTracks: z.array(trackSchema),
+    currentTracks: z.array(trackReferenceSchema),
     kind: z.literal('playlist.delete'),
     playlistId: z.string(),
     title: z.string(),
   }),
   z.object({
-    currentTracks: z.array(trackSchema),
+    currentTracks: z.array(trackReferenceSchema),
     kind: z.literal('playlist.replaceTracks'),
     playlistId: z.string(),
     title: z.string(),

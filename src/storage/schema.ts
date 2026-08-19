@@ -18,6 +18,15 @@ export const trackReferenceSchema: z.ZodType<TrackReference> = z
       .optional(),
     album: z.string().min(1).optional(),
     artists: z.array(z.string().min(1)).min(1),
+    audio: z
+      .object({
+        bitDepth: z.number().int().positive().optional(),
+        format: z.string().min(1).optional(),
+        mediaTags: z.array(z.string().min(1)).min(1).optional(),
+        sampleRateHz: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
     durationSeconds: z.number().int().nonnegative().optional(),
     explicit: z.boolean().optional(),
     id: z.string().min(1),
