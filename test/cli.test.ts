@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Writable } from 'node:stream';
@@ -362,6 +362,121 @@ describe('CLI', () => {
     expect(exitCode).toBe(2);
     expect(invoked).toBe(false);
     expect(streams.stderr.toString()).toContain('Expected a positive integer');
+  });
+
+  it('inspects track quality from a structured tracks file', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tidekeeper-quality-'));
+    temporaryRoots.push(root);
+    const tracksFile = join(root, 'tracks.json');
+    await writeFile(
+      tracksFile,
+      JSON.stringify([{ artists: ['Artist'], id: '1', title: 'Track' }]),
+    );
+    const streams = createStreams();
+
+    const exitCode = await runCli(
+      [
+        'node',
+        'tidekeeper',
+        '--output',
+        'json',
+        'tracks',
+        'inspect',
+        '--tracks-file',
+        tracksFile,
+        '--min-sample-rate',
+        '80000',
+      ],
+      {
+        inspectTracks: (tracks, options) => {
+          const track = tracks[0];
+          if (track === undefined) {
+            return Promise.reject(new Error('Expected one input track.'));
+          }
+          return Promise.resolve({
+            candidates: tracks.length,
+            inspected: tracks.length,
+            mediaTag: options.mediaTag,
+            rejected: [],
+            tracks: [
+              {
+                ...track,
+                audio: {
+                  bitDepth: 24,
+                  format: 'FLAC_HIRES',
+                  mediaTags: ['HIRES_LOSSLESS'],
+                  sampleRateHz: 96_000,
+                },
+              },
+            ],
+          });
+        },
+        streams,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(streams.stdout.toString())).toMatchObject({
+      candidates: 1,
+      inspected: 1,
+      tracks: [
+        {
+          audio: {
+            bitDepth: 24,
+            sampleRateHz: 96_000,
+          },
+          id: '1',
+        },
+      ],
+    });
+  });
+
+  it('finds related tracks from a structured seed file', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tidekeeper-related-'));
+    temporaryRoots.push(root);
+    const tracksFile = join(root, 'tracks.json');
+    await writeFile(
+      tracksFile,
+      JSON.stringify([{ artists: ['Artist'], id: '1', title: 'Track' }]),
+    );
+    const streams = createStreams();
+
+    const exitCode = await runCli(
+      [
+        'node',
+        'tidekeeper',
+        '--output',
+        'json',
+        'tracks',
+        'related',
+        '--tracks-file',
+        tracksFile,
+        '--by',
+        'album',
+      ],
+      {
+        relatedTracks: (tracks, options) => {
+          expect(options).toEqual({ by: 'album', limitPerSource: 50 });
+          return Promise.resolve([
+            {
+              artists: ['Related Artist'],
+              id: `${tracks[0]?.id}-related`,
+              title: 'Related Track',
+            },
+          ]);
+        },
+        streams,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(streams.stdout.toString())).toEqual([
+      {
+        artists: ['Related Artist'],
+        id: '1-related',
+        title: 'Related Track',
+      },
+    ]);
   });
 
   it('keeps sync push as a plan-only dry run unless apply is explicit', async () => {

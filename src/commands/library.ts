@@ -253,7 +253,7 @@ function replacePlaylist(
   };
 }
 
-async function readTracksFile(path: string): Promise<TrackReference[]> {
+export async function readTracksFile(path: string): Promise<TrackReference[]> {
   let value: unknown;
   try {
     value = JSON.parse(await readFile(resolve(path), 'utf8'));

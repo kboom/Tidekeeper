@@ -497,6 +497,12 @@ function mergeLocalOnlyUnavailableTracks(
   remote: LibrarySnapshot,
 ): LibrarySnapshot {
   const merged = structuredClone(remote);
+  const localFavoritesById = new Map(
+    local.favorites.tracks.map((track) => [track.id, track]),
+  );
+  merged.favorites.tracks = merged.favorites.tracks.map((remoteTrack) =>
+    mergeLocalAudio(localFavoritesById.get(remoteTrack.id), remoteTrack),
+  );
   const localById = new Map(
     local.playlists
       .filter(
@@ -527,7 +533,7 @@ function mergeLocalOnlyUnavailableTracks(
           `TIDAL playlist ${remotePlaylist.id} is missing an available track after push completion.`,
         );
       }
-      return remoteTrack;
+      return mergeLocalAudio(localTrack, remoteTrack);
     });
     if (remoteIndex !== remoteTracks.length) {
       throw new ConflictError(
@@ -536,6 +542,22 @@ function mergeLocalOnlyUnavailableTracks(
     }
   }
   return merged;
+}
+
+function mergeLocalAudio(
+  localTrack: TrackReference | undefined,
+  remoteTrack: TrackReference,
+): TrackReference {
+  if (!localTrack?.audio) {
+    return remoteTrack;
+  }
+  return {
+    ...remoteTrack,
+    audio: {
+      ...localTrack.audio,
+      ...remoteTrack.audio,
+    },
+  };
 }
 
 function operationsAreResumeCompatible(

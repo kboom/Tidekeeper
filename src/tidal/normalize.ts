@@ -28,6 +28,7 @@ export function normalizeTrack(
   const externalUrl = resource.attributes.externalLinks?.find(
     (link) => link.meta.type === 'TIDAL_SHARING',
   )?.href;
+  const mediaTags = readMediaTags(resource.attributes);
 
   return {
     id: resource.id,
@@ -38,10 +39,17 @@ export function normalizeTrack(
     ...(albumId
       ? { album: included.getAlbum(albumId)?.attributes?.title ?? albumId }
       : {}),
+    ...(mediaTags.length ? { audio: { mediaTags } } : {}),
     durationSeconds: parseIsoDuration(resource.attributes.duration),
     explicit: resource.attributes.explicit,
     tidalUrl: externalUrl ?? `https://tidal.com/browse/track/${resource.id}`,
   };
+}
+
+function readMediaTags(attributes: {
+  mediaTags?: readonly string[];
+}): string[] {
+  return [...(attributes.mediaTags ?? [])];
 }
 
 export function parseIsoDuration(duration: string): number {

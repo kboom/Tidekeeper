@@ -1,7 +1,15 @@
+export type TrackAudio = {
+  bitDepth?: number | undefined;
+  format?: string | undefined;
+  mediaTags?: string[] | undefined;
+  sampleRateHz?: number | undefined;
+};
+
 export type TrackReference = {
   addedAt?: string | undefined;
   album?: string | undefined;
   artists: string[];
+  audio?: TrackAudio | undefined;
   durationSeconds?: number | undefined;
   explicit?: boolean | undefined;
   id: string;
